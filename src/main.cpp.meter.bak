@@ -1,0 +1,152 @@
+#include <Arduino.h>
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "WaterMeter.h"
+#include "hwconfig.h"
+
+WaterMeter waterMeter;
+
+static void decodeManufacturer(uint16_t m, char out[4])
+{
+    out[0] = char(((m >> 10) & 0x1F) + 64);
+    out[1] = char(((m >> 5)  & 0x1F) + 64);
+    out[2] = char((m & 0x1F) + 64);
+    out[3] = '\0';
+}
+
+static void formatMeterId(const uint8_t *b, char out[9])
+{
+    // wM-Bus meter ID is BCD, least-significant byte first.
+    snprintf(
+        out, 9,
+        "%02X%02X%02X%02X",
+        b[3], b[2], b[1], b[0]
+    );
+}
+
+static int parseHexBytes(const char *str, uint8_t *bytes, int maxBytes)
+{
+    const char *p = strstr(str, "data=");
+    if (!p) return 0;
+
+    p += 5;
+
+    int count = 0;
+
+    while (*p && count < maxBytes)
+    {
+        while (*p == ' ') p++;
+
+        if (!isxdigit((unsigned char)p[0]) ||
+            !isxdigit((unsigned char)p[1]))
+            break;
+
+        char tmp[3] = {p[0], p[1], '\0'};
+        bytes[count++] = (uint8_t)strtoul(tmp, nullptr, 16);
+
+        p += 2;
+    }
+
+    return count;
+}
+
+void mqttDebugRf(const char *str)
+{
+    uint8_t b[128];
+    int n = parseHexBytes(str, b, sizeof(b));
+
+    // Raw structure from this project:
+    // 0: 0x54
+    // 1: 0x3D
+    // 2: payload length
+    // 3: C-field
+    // 4-5: manufacturer
+    // 6-9: meter ID
+    // 10: version
+    // 11: device type
+
+    if (n < 12)
+    {
+        Serial.println(str);
+        return;
+    }
+
+    uint16_t manufacturerCode =
+        (uint16_t)b[4] |
+        ((uint16_t)b[5] << 8);
+
+    char manufacturer[4];
+    decodeManufacturer(manufacturerCode, manufacturer);
+
+    char meterId[9];
+    formatMeterId(&b[6], meterId);
+
+    Serial.println();
+    Serial.println("----- Wireless M-Bus packet -----");
+
+    Serial.printf("Manufacturer : %s (0x%04X)\n",
+                  manufacturer,
+                  manufacturerCode);
+
+    Serial.printf("Meter ID     : %s\n", meterId);
+    Serial.printf("Version      : 0x%02X\n", b[10]);
+    Serial.printf("Device type  : 0x%02X\n", b[11]);
+    Serial.printf("RF length    : %d bytes\n", n);
+
+    Serial.print("Raw          : ");
+    for (int i = 0; i < n; i++)
+    {
+        Serial.printf("%02X", b[i]);
+        if (i < n - 1) Serial.print(" ");
+    }
+    Serial.println();
+}
+
+void mqttDebugRecord(const char *str)
+{
+    Serial.print("[REC] ");
+    Serial.println(str);
+}
+
+void mqttDebugRaw(const char *str)
+{
+    Serial.print("[RAW] ");
+    Serial.println(str);
+}
+
+void mqttMyData(const char *str)
+{
+    Serial.print("[DATA] ");
+    Serial.println(str);
+}
+
+void mqttMyDataJson(const char *str)
+{
+    Serial.print("[JSON] ");
+    Serial.println(str);
+}
+
+void setup()
+{
+    Serial.begin(115200);
+    delay(1000);
+
+    Serial.println();
+    Serial.println("==============================");
+    Serial.println("Wireless M-Bus scanner");
+    Serial.println("ESP32 + CC1101");
+    Serial.println("No WiFi / MQTT / DEK");
+    Serial.println("==============================");
+
+    waterMeter.begin();
+
+    Serial.println("CC1101 initialized.");
+    Serial.println("Listening...");
+}
+
+void loop()
+{
+    waterMeter.isFrameAvailable();
+}
